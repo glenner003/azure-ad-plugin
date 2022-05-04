@@ -5,14 +5,28 @@
 
 package com.microsoft.jenkins.azuread;
 
+import com.azure.resourcemanager.appservice.models.OpenIdConnectConfig;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
+import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.microsoft.graph.httpcore.HttpClients;
+import com.nimbusds.openid.connect.sdk.op.OIDCProviderMetadata;
 import hudson.Functions;
 import hudson.ProxyConfiguration;
 import hudson.util.FormValidation;
+import java.util.Objects;
 import jenkins.model.Jenkins;
+import okhttp3.Call;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
 import org.jose4j.http.Get;
 import org.jose4j.jwk.HttpsJwks;
 import org.jose4j.jwt.consumer.JwtConsumer;
@@ -72,10 +86,14 @@ public final class Utils {
     public static class JwtUtil {
         public static final long DEFAULT_CACHE_DURATION = TimeUnit.HOURS.toSeconds(24);
         public static final String KEYSTORE_URL = "https://login.microsoftonline.com/common/discovery/keys";
+        public static final String CONFIG_URL_TEMPLATE =
+                "https://login.microsoftonline.com/%s/.well-known/openid-configuration?appid=%s";
 
         public static JwtConsumer jwt(final String clientId, final String tenantId) {
             final String expectedIssuer = String.format("https://login.microsoftonline.com/%s/v2.0", tenantId);
-            HttpsJwks httpsJwks = new HttpsJwks(KEYSTORE_URL);
+
+
+            HttpsJwks httpsJwks = new HttpsJwks(getKeystoreUrl(tenantId, clientId));
             httpsJwks.setDefaultCacheDuration(DEFAULT_CACHE_DURATION);
             ProxyConfiguration proxy = Jenkins.get().getProxy();
             if (proxy != null) {
@@ -92,6 +110,34 @@ public final class Utils {
                     .setRequireNotBefore()
                     .setRequireExpirationTime()
                     .build();
+        }
+
+        private static String getKeystoreUrl(final String clientId, final String tenantId) {
+            final String configUrl = String.format(CONFIG_URL_TEMPLATE, clientId, tenantId);
+            OkHttpClient client =new  OkHttpClient();
+            Request request = new Request.Builder().get().url(configUrl).build();
+            Call call =client.newCall(request);
+
+            try {
+                ObjectMapper objectMapper = new ObjectMapper();
+                //objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+                Response response = call.execute();
+                if (response != null) {
+                    ResponseBody responseBody = response.body();
+                    if (responseBody != null) {
+                        if (response.body() != null) {
+
+                            AzureOpenIDConfig config = objectMapper.readValue(
+                                    responseBody.string(), AzureOpenIDConfig.class);
+                            if (config != null) {
+                                return config.getJwksUri().toString();
+                            }
+                        }
+                    }}
+                throw new IllegalStateException(String.format("Failed to get open id config from %s", configUrl));
+            } catch (IOException e) {
+                throw new IllegalStateException(String.format("Failed to get open id config from %s", configUrl), e);
+            }
         }
     }
 }
